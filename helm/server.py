@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import errno
 import getpass
 import hashlib
 import hmac
@@ -1151,6 +1152,30 @@ def make_handler(app, agent_only=False):
 # CLI
 # ---------------------------------------------------------------------------
 
+def parse_listen(value):
+    """'host:port' for agent_listen; also accepts a URL or a bare port by mistake."""
+    raw = str(value).strip()
+    if raw.isdigit():
+        return "0.0.0.0", int(raw)
+    parts = urlparse(raw if "//" in raw else "//" + raw)
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if not port:
+        raise ValueError(f"agent_listen must be host:port, e.g. \"0.0.0.0:8781\" (got {raw!r})")
+    return parts.hostname or "0.0.0.0", port
+
+
+def bind(addr, handler, what, key):
+    try:
+        return ThreadingHTTPServer(addr, handler)
+    except OSError as e:
+        hint = ("is another program (or another Helm) using that port?" if e.errno == errno.EADDRINUSE else
+                "that host isn't an address of this machine; use 0.0.0.0, 127.0.0.1 or one of its IPs")
+        sys.exit(f"Can't listen on {addr[0]}:{addr[1]} for {what} ({key} in config): {e.strerror or e}\n  {hint}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Helm hub: lightweight server control plane")
     ap.add_argument("-c", "--config", default=str(APP_DIR / "config.json"), help="path to config.json")
@@ -1193,16 +1218,19 @@ def main():
         print("WARNING: listening on a non-loopback address with NO login.", file=sys.stderr)
 
     app = App(config)
-    server = ThreadingHTTPServer((host, port), make_handler(app))
+    server = bind((host, port), make_handler(app), "the UI", "host/port")
     server.daemon_threads = True
     if config["agent_listen"]:
-        a_host, _, a_port = config["agent_listen"].rpartition(":")
-        agent_server = ThreadingHTTPServer((a_host or "0.0.0.0", int(a_port)), make_handler(app, agent_only=True))
+        try:
+            a_host, a_port = parse_listen(config["agent_listen"])
+        except ValueError as e:
+            sys.exit(f"{e}\n  The URL agents should use (with http://) goes in \"agent_url\" instead.")
+        agent_server = bind((a_host, a_port), make_handler(app, agent_only=True), "agents", "agent_listen")
         agent_server.daemon_threads = True
         threading.Thread(target=agent_server.serve_forever, daemon=True).start()
-        print(f"Agent endpoint listening on http://{a_host or '0.0.0.0'}:{a_port} (agent API only, no UI)")
+        print(f"Agent endpoint listening on http://{a_host}:{a_port} (agent API only, no UI)")
         if not config["agent_url"]:
-            print("  Tip: set \"agent_url\" (e.g. http://<this-host-LAN-IP>:" + a_port + ") so install commands point there.",
+            print(f"  Tip: set \"agent_url\" (e.g. http://<this-host-LAN-IP>:{a_port}) so install commands point there.",
                   file=sys.stderr)
     mode = "login required" if config.auth_enabled else "no login"
     n = len(app.servers.conns)
