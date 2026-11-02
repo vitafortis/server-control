@@ -1,0 +1,19 @@
+[Unit]
+Description=Helm server control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as root so actions can manage services and the system directly.
+# To run unprivileged instead, see deploy/helm.sudoers and set local_agent.policy.use_sudo: true.
+User=root
+WorkingDirectory=/opt/helm
+ExecStart=/usr/bin/python3 -u /opt/helm/server.py --config /etc/helm/config.json
+Restart=on-failure
+RestartSec=3
+# Child processes (your scripts) are killed when Helm stops.
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

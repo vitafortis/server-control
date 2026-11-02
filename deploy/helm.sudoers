@@ -1,0 +1,12 @@
+# Optional: run the Helm hub or a helm-agent as an unprivileged "helm" user and let it manage services.
+# Install with:  sudo visudo -f /etc/sudoers.d/helm   (paste this, adjust as needed)
+# Then set "use_sudo": true in the policy (hub: local_agent.policy in /etc/helm/config.json;
+# agent: "policy" in /etc/helm-agent/agent.json) and User=helm in the systemd unit.
+#
+# Saved actions/console commands run as the helm user; prefix them with `sudo -n`
+# and add matching rules here for anything that needs root.
+
+helm ALL=(root) NOPASSWD: /usr/bin/systemctl start *, /usr/bin/systemctl stop *, \
+                          /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, \
+                          /usr/bin/systemctl enable *, /usr/bin/systemctl disable *, \
+                          /usr/bin/systemctl status *, /usr/bin/journalctl -u *

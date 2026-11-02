@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0b0d12">
+  <title>Helm</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/static/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/theme-init.js"></script>
+</head>
+<body>
+  <!-- Login -->
+  <div id="login-view" class="login" hidden>
+    <div class="glow-top login-glow"></div>
+    <form id="login-form" class="card login-card">
+      <div class="login-brand"><img src="/favicon.svg" alt="" width="40" height="40"><div><h1>Helm</h1><p class="muted" id="login-host"></p></div></div>
+      <label class="field"><span class="label">Username</span><input class="input" name="username" autocomplete="username" required autofocus></label>
+      <label class="field"><span class="label">Password</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+      <p class="form-error" id="login-error" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit"><i data-icon="log-out"></i>Sign in</button>
+    </form>
+  </div>
+
+  <!-- App -->
+  <div id="app-view" class="shell" hidden>
+    <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <a href="#actions" class="brand"><img src="/favicon.svg" alt="" width="26" height="26"><span>Helm</span></a>
+        <button class="btn btn-ghost btn-icon btn-sm mobile-only" id="sidebar-close" aria-label="Close menu"><i data-icon="x"></i></button>
+      </div>
+      <div class="sidebar-new" data-edit-only>
+        <a class="btn btn-primary btn-block btn-sm-h" href="#edit/new"><i data-icon="plus"></i>New action</a>
+      </div>
+      <nav class="nav">
+        <a href="#actions" data-view="actions"><i data-icon="zap"></i>Actions</a>
+        <a href="#servers" data-view="servers"><i data-icon="globe"></i>Servers<span class="nav-count" id="nav-servers"></span></a>
+        <a href="#services" data-view="services"><i data-icon="server"></i>Services</a>
+        <a href="#files" data-view="files"><i data-icon="folder"></i>Files</a>
+        <a href="#console" data-view="console" data-edit-only><i data-icon="terminal"></i>Console</a>
+        <a href="#history" data-view="history"><i data-icon="history"></i>History</a>
+      </nav>
+      <div class="side-label"><span>Recent runs</span></div>
+      <div class="side-runs" id="side-runs"></div>
+      <div class="side-user" id="side-user" hidden>
+        <span class="avatar" id="side-avatar"></span>
+        <div><p class="side-user-name" id="side-user-name"></p><p class="side-user-sub">Signed in</p></div>
+      </div>
+      <div class="sidebar-foot">
+        <button class="btn btn-ghost btn-icon btn-sm" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
+        <span class="version" id="version"></span>
+        <button class="btn btn-ghost btn-icon btn-sm push" id="logout-btn" title="Sign out" aria-label="Sign out" hidden><i data-icon="log-out"></i></button>
+      </div>
+    </aside>
+
+    <div class="main-col">
+      <header class="mobile-bar">
+        <button class="btn btn-ghost btn-icon btn-sm" id="sidebar-open" aria-label="Menu"><i data-icon="menu"></i></button>
+        <a href="#actions" class="brand"><img src="/favicon.svg" alt="" width="22" height="22"><span>Helm</span></a>
+      </header>
+
+      <main class="main" id="main">
+        <div class="hostbar">
+          <div class="menu">
+            <button class="switcher" id="server-switcher" aria-haspopup="menu" aria-label="Choose server">
+              <span class="dot" id="switcher-dot"></span>
+              <span class="switcher-text">
+                <span class="host-name" id="host-name">—</span>
+                <span class="host-meta" id="host-meta"></span>
+              </span>
+              <i data-icon="chevron-down"></i>
+            </button>
+            <div class="menu-pop switcher-pop" id="switcher-pop" role="menu" hidden></div>
+          </div>
+          <div class="stats" id="stats"></div>
+        </div>
+
+        <!-- Actions -->
+        <section class="view" id="view-actions" hidden>
+          <div class="page-head">
+            <div class="glow-top"></div>
+            <div class="page-head-inner">
+              <div>
+                <h1>Actions</h1>
+                <p class="muted" id="actions-sub">Saved commands and scripts, one click away.</p>
+              </div>
+              <div class="toolbar">
+                <label class="search"><i data-icon="search"></i><input id="action-search" type="search" placeholder="Search actions…" aria-label="Search actions"><kbd class="kbd">/</kbd></label>
+                <a class="btn btn-primary" href="#edit/new" data-edit-only><i data-icon="plus"></i>New action</a>
+              </div>
+            </div>
+            <div class="pills" id="action-pills"></div>
+          </div>
+          <div class="page-body" id="action-groups"></div>
+        </section>
+
+        <!-- Servers -->
+        <section class="view" id="view-servers" hidden>
+          <div class="page-head">
+            <div class="glow-top"></div>
+            <div class="page-head-inner">
+              <div>
+                <h1>Servers</h1>
+                <p class="muted" id="servers-sub">Machines this hub manages. Each runs helm-agent, which dials out to the hub.</p>
+              </div>
+              <div class="toolbar">
+                <button class="btn btn-primary" id="add-server" data-edit-only><i data-icon="plus"></i>Add server</button>
+              </div>
+            </div>
+            <div class="pills" id="server-pills"></div>
+          </div>
+          <div class="page-body" id="servers-body"></div>
+        </section>
+
+        <!-- Services -->
+        <section class="view" id="view-services" hidden>
+          <div class="page-head">
+            <div class="glow-top"></div>
+            <div class="page-head-inner">
+              <div>
+                <h1>Services</h1>
+                <p class="muted" id="services-sub">systemd units on this server. Pin the ones you manage most.</p>
+              </div>
+              <div class="toolbar">
+                <label class="search"><i data-icon="search"></i><input id="service-search" type="search" placeholder="Filter services…" aria-label="Filter services"></label>
+                <button class="btn btn-secondary btn-icon" id="services-refresh" title="Refresh" aria-label="Refresh"><i data-icon="refresh-cw"></i></button>
+              </div>
+            </div>
+            <div class="pills" id="service-pills"></div>
+          </div>
+          <div class="page-body" id="services-body"></div>
+        </section>
+
+        <!-- Files -->
+        <section class="view" id="view-files" hidden>
+          <div class="page-head">
+            <div class="glow-top"></div>
+            <div class="page-head-inner">
+              <div>
+                <h1>Files</h1>
+                <p class="muted" id="files-sub">Browse and edit config and logs in this server’s allowed folders.</p>
+              </div>
+            </div>
+            <nav class="crumbs" id="files-crumbs" aria-label="Path"></nav>
+          </div>
+          <div class="page-body files-layout">
+            <div class="card files-list" id="files-list"></div>
+            <div class="files-viewer" id="files-viewer"></div>
+          </div>
+        </section>
+
+        <!-- Script editor -->
+        <section class="view" id="view-edit" hidden>
+          <div class="page-head">
+            <div class="glow-top"></div>
+            <div class="page-head-inner">
+              <div class="edit-title">
+                <a class="btn btn-ghost btn-icon btn-sm" href="#actions" aria-label="Back to actions"><i data-icon="arrow-left"></i></a>
+                <span class="tile-icon tile-icon-sm" id="edit-icon"></span>
+                <div>
+                  <h1 id="edit-heading">New action</h1>
+                  <p class="muted" id="edit-sub">Write a script, test it on a server, save it as a one-click action.</p>
+                </div>
+              </div>
+              <div class="toolbar">
+                <button class="btn btn-secondary" id="edit-check"><i data-icon="check"></i>Check</button>
+                <button class="btn btn-secondary" id="edit-run"><i data-icon="play"></i>Test run</button>
+                <button class="btn btn-primary" id="edit-save"><i data-icon="save"></i>Save</button>
+              </div>
+            </div>
+          </div>
+          <div class="page-body edit-layout">
+            <div class="edit-main">
+              <div class="term-frame code-frame">
+                <div class="term-chrome">
+                  <span class="term-dots"><i></i><i></i><i></i></span>
+                  <select id="edit-interp" class="select-sm" aria-label="Interpreter">
+                    <option value="bash">bash</option>
+                    <option value="sh">sh</option>
+                    <option value="python3">python3</option>
+                  </select>
+                  <span class="term-meta" id="edit-pos"></span>
+                  <span class="spacer"></span>
+                  <span class="hint"><kbd class="kbd">Ctrl</kbd><kbd class="kbd">S</kbd> save · <kbd class="kbd">Ctrl</kbd><kbd class="kbd">↵</kbd> test run</span>
+                </div>
+                <div class="code-host" id="edit-code"></div>
+              </div>
+              <div class="term-frame glow-inset edit-out" id="edit-out" hidden>
+                <div class="term-chrome">
+                  <span class="badge" id="edit-out-status"></span>
+                  <span class="term-title" id="edit-out-title"></span>
+                  <span class="spacer"></span>
+                  <span class="term-meta" id="edit-out-time"></span>
+                  <button class="btn btn-danger btn-sm" id="edit-out-kill" hidden><i data-icon="square"></i>Stop</button>
+                  <button class="btn btn-ghost btn-icon btn-sm" id="edit-out-close" aria-label="Close output"><i data-icon="x"></i></button>
+                </div>
+                <pre class="term" id="edit-out-term"></pre>
+              </div>
+            </div>
+            <form class="card edit-side" id="edit-form" autocomplete="off"></form>
+          </div>
+        </section>
+
+        <!-- Console -->
+        <section class="view" id="view-console" hidden>
+          <div class="page-head">
+            <div class="glow-top"></div>
+            <div class="page-head-inner">
+              <div>
+                <h1>Console</h1>
+                <p class="muted" id="console-sub">Run anything on the selected server. Keep what works by saving it as an action.</p>
+              </div>
+            </div>
+          </div>
+          <div class="page-body">
+            <div class="term-frame code-frame" id="console-editor">
+              <div class="term-chrome">
+                <span class="term-dots"><i></i><i></i><i></i></span>
+                <select id="console-interp" class="select-sm" aria-label="Interpreter">
+                  <option value="bash">bash</option>
+                  <option value="sh">sh</option>
+                  <option value="python3">python3</option>
+                </select>
+                <span class="hint"><kbd class="kbd">Ctrl</kbd><kbd class="kbd">↵</kbd> to run</span>
+                <span class="spacer"></span>
+                <button class="btn btn-secondary btn-sm" id="console-save"><i data-icon="save"></i>Save as action</button>
+                <button class="btn btn-primary btn-sm" id="console-run"><i data-icon="play"></i>Run</button>
+              </div>
+              <div class="code-host code-host-short" id="console-code"></div>
+            </div>
+            <div class="term-frame console-out glow-inset" id="console-out" hidden>
+              <div class="term-chrome">
+                <span class="badge" id="console-status"></span>
+                <span class="term-title" id="console-title"></span>
+                <span class="spacer"></span>
+                <span class="term-meta" id="console-time"></span>
+                <button class="btn btn-danger btn-sm" id="console-kill" hidden><i data-icon="square"></i>Stop</button>
+              </div>
+              <pre class="term" id="console-term"></pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- History -->
+        <section class="view" id="view-history" hidden>
+          <div class="page-head">
+            <div class="glow-top"></div>
+            <div class="page-head-inner">
+              <div>
+                <h1>History</h1>
+                <p class="muted">Every run and file edit: where, who, and what it printed.</p>
+              </div>
+              <div class="toolbar">
+                <label class="search"><i data-icon="search"></i><input id="history-search" type="search" placeholder="Search history…" aria-label="Search history"></label>
+              </div>
+            </div>
+          </div>
+          <div class="page-body"><div class="card list" id="history-list"></div></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Run drawer -->
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="run-drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <span class="tile-icon tile-icon-sm" id="run-icon"></span>
+      <div class="drawer-title">
+        <div id="run-title"></div>
+        <div class="drawer-sub" id="run-sub"></div>
+      </div>
+      <span class="badge" id="run-status"></span>
+      <button class="btn btn-danger btn-sm" id="run-kill" hidden><i data-icon="square"></i>Stop</button>
+      <button class="btn btn-secondary btn-sm" id="run-rerun" hidden><i data-icon="rotate-cw"></i>Run again</button>
+      <button class="btn btn-ghost btn-icon btn-sm" id="run-close" aria-label="Close"><i data-icon="x"></i></button>
+    </div>
+    <div class="run-tabs" id="run-tabs" role="tablist" hidden></div>
+    <div class="drawer-body">
+      <div class="term-frame term-fill glow-inset" id="run-frame"><pre class="term" id="run-term"></pre></div>
+    </div>
+  </aside>
+
+  <!-- Modal -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <form id="modal-form">
+        <div class="modal-head"><h2 id="modal-title"></h2>
+          <button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Close"><i data-icon="x"></i></button>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-foot" id="modal-foot"></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="/static/icons.js"></script>
+  <script src="/static/editor.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
