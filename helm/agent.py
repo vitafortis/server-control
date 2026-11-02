@@ -34,7 +34,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 INTERPRETERS = {"bash": "bash", "sh": "sh", "python3": "python3"}
 SERVICE_ACTIONS = {"start", "stop", "restart", "reload", "enable", "disable", "status", "logs"}
@@ -57,6 +57,9 @@ DEFAULT_POLICY = {
     # Prefix systemctl/journalctl with `sudo -n` when the agent isn't root.
     "use_sudo": False,
     "job_timeout_seconds": 3600,
+    # Let the hub repoint this agent to another hub address (e.g. a new IP). The agent checks
+    # that the new address answers with this same agent key before it switches.
+    "allow_hub_change": True,
 }
 
 
@@ -497,9 +500,9 @@ class HubClient:
         self.cfg = cfg
         self.ctx = ssl.create_default_context(cafile=cfg.get("ca_file") or None)
 
-    def post(self, path, body, timeout=40, auth=True):
+    def post(self, path, body, timeout=40, auth=True, base=None):
         data = json.dumps(body).encode()
-        req = urllib.request.Request(self.cfg["hub_url"].rstrip("/") + path, data=data, method="POST",
+        req = urllib.request.Request((base or self.cfg["hub_url"]).rstrip("/") + path, data=data, method="POST",
                                      headers={"Content-Type": "application/json",
                                               "User-Agent": f"helm-agent/{VERSION}"})
         if auth:
@@ -554,12 +557,27 @@ class Agent:
         elif t == "req":
             def work():
                 try:
-                    data = self.executor.handle(msg.get("kind"), msg.get("payload") or {})
+                    if msg.get("kind") == "set_hub":
+                        data = self.set_hub((msg.get("payload") or {}).get("url"))
+                    else:
+                        data = self.executor.handle(msg.get("kind"), msg.get("payload") or {})
                     reply = {"req_id": msg["req_id"], "ok": True, "data": data}
                 except (PolicyError, ValueError, OSError) as e:
                     reply = {"req_id": msg["req_id"], "ok": False, "error": str(e)}
                 self._queue("replies", reply)
             threading.Thread(target=work, daemon=True).start()
+
+    def set_hub(self, url):
+        """Switch to another address for the same hub, asked for by the hub itself."""
+        if not self.executor.policy.get("allow_hub_change", True):
+            raise PolicyError("this server does not allow changing its hub address remotely")
+        url = check_hub_url(url, self.cfg.get("insecure_http"))
+        verify_hub(self.client, self.cfg, url)
+        old = self.cfg["hub_url"]
+        self.cfg["hub_url"] = url
+        atomic_write_json(self.cfg_path, self.cfg)
+        log(f"hub address changed: {old} -> {url}")
+        return {"hub_url": url, "previous": old}
 
     def _shutdown(self, signum, _frame):
         # Jobs run in their own process groups (so Stop can kill a whole tree); take them down with us.
@@ -576,7 +594,7 @@ class Agent:
         while True:
             try:
                 resp = self.client.post("/agent/poll", {
-                    "version": VERSION, "system": system_info(),
+                    "version": VERSION, "system": system_info(), "hub_url": self.cfg["hub_url"],
                     "policy": self.executor.public_policy(), "running": self.executor.running(),
                 }, timeout=45)
                 if not connected:
@@ -620,13 +638,72 @@ def is_lan_host(host):
         return "." not in host or host.endswith(LAN_SUFFIXES)
 
 
+def check_hub_url(url, insecure_http=False):
+    """Normalize a hub URL; plain http is only allowed to private/LAN addresses unless insecure_http."""
+    url = str(url or "").strip().rstrip("/")
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(f"not a hub URL: {url!r} (expected http(s)://host[:port])")
+    if parts.scheme == "http" and not insecure_http and not is_lan_host(parts.hostname):
+        raise ValueError("refusing plain http to a public address: the agent key would travel unencrypted. "
+                         "Use the hub's https:// URL, its LAN address, or --insecure-http if you really mean it.")
+    return url
+
+
+def verify_hub(client, cfg, url):
+    """Make sure `url` reaches the same hub: it must accept this agent's key."""
+    try:
+        resp = client.post("/agent/ping", {}, timeout=15, base=url)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise ValueError(f"{url} does not know this agent's key (a different hub?)")
+        if e.code == 404:
+            raise ValueError(f"{url} has no /agent/ping (not a Helm hub, or one older than 1.2)")
+        raise ValueError(f"{url} answered {e.code} (is that the Helm hub's address?)")
+    except (urllib.error.URLError, OSError) as e:
+        raise ValueError(f"cannot reach {url}: {getattr(e, 'reason', e)}")
+    if resp.get("agent_id") != cfg.get("agent_id"):
+        raise ValueError(f"{url} answered as a different hub")
+
+
+def set_hub_cli(cfg_path, url, insecure_http, ca_file, no_check):
+    """agent.py --set-hub: repoint an enrolled agent from the server itself (e.g. the hub moved)."""
+    cfg_path = Path(cfg_path)
+    if not cfg_path.exists():
+        sys.exit(f"No config at {cfg_path}. Enroll first: agent.py --enroll <hub-url> <token>")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    if insecure_http:
+        cfg["insecure_http"] = True
+    if ca_file:
+        cfg["ca_file"] = ca_file
+    try:
+        url = check_hub_url(url, cfg.get("insecure_http"))
+    except ValueError as e:
+        sys.exit(f"Not changed: {e}")
+    if not no_check:
+        try:
+            verify_hub(HubClient(cfg), cfg, url)
+        except ValueError as e:
+            sys.exit(f"Not changed: {e}\nUse --no-check to save it anyway (e.g. the hub isn't up yet).")
+    old = cfg.get("hub_url")
+    cfg["hub_url"] = url
+    atomic_write_json(cfg_path, cfg)
+    print(f"Hub address: {old} -> {url}")
+    if shutil.which("systemctl") and subprocess.run(["systemctl", "is-active", "--quiet", "helm-agent"]).returncode == 0:
+        subprocess.run(["systemctl", "restart", "helm-agent"], check=False)
+        print("Restarted helm-agent.")
+    else:
+        print("Restart the agent to use it: systemctl restart helm-agent")
+
+
 def enroll(cfg_path, hub_url, token, name, tags, insecure_http, ca_file):
-    if hub_url.startswith("http://") and not insecure_http:
-        host = urllib.parse.urlsplit(hub_url).hostname or ""
-        if not is_lan_host(host):
-            sys.exit("Refusing to enroll over plain http to a public address: the agent key would travel unencrypted.\n"
-                     "Use the hub's https:// URL, its LAN address, or pass --insecure-http if you really mean it.")
-        log(f"Using plain http to {host} (private network). Traffic is unencrypted on your LAN.")
+    try:
+        hub_url = check_hub_url(hub_url, insecure_http)
+    except ValueError as e:
+        sys.exit(f"Refusing to enroll: {e}")
+    if hub_url.startswith("http://"):
+        log(f"Using plain http to {urllib.parse.urlsplit(hub_url).hostname}. Traffic is unencrypted on your network.")
     cfg_path = Path(cfg_path)
     cfg = {}
     if cfg_path.exists():
@@ -635,6 +712,8 @@ def enroll(cfg_path, hub_url, token, name, tags, insecure_http, ca_file):
     cfg.update(hub_url=hub_url.rstrip("/"), name=name or socket.gethostname())
     if ca_file:
         cfg["ca_file"] = ca_file
+    if insecure_http:
+        cfg["insecure_http"] = True
     cfg.setdefault("work_dir", "/var/lib/helm-agent")
     cfg.setdefault("policy", dict(DEFAULT_POLICY))
     client = HubClient(cfg)
@@ -661,8 +740,13 @@ def main():
     ap.add_argument("--name", help="display name (default: hostname)")
     ap.add_argument("--tags", default="", help="comma-separated tags, e.g. web,prod")
     ap.add_argument("--ca-file", help="CA bundle for a hub with a private certificate")
-    ap.add_argument("--insecure-http", action="store_true", help="allow enrolling over plain http")
+    ap.add_argument("--set-hub", metavar="HUB_URL", help="change the hub address of an enrolled agent and exit")
+    ap.add_argument("--no-check", action="store_true", help="with --set-hub: save without testing the new address")
+    ap.add_argument("--insecure-http", action="store_true", help="allow plain http to a public address")
     args = ap.parse_args()
+    if args.set_hub:
+        set_hub_cli(args.config, args.set_hub, args.insecure_http, args.ca_file, args.no_check)
+        return
     if args.enroll:
         tags = [t.strip() for t in args.tags.split(",") if t.strip()]
         enroll(args.config, args.enroll[0], args.enroll[1], args.name, tags, args.insecure_http, args.ca_file)

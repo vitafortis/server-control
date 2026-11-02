@@ -288,7 +288,7 @@ function renderSideRuns() {
 // ---------------------------------------------------------------------------
 async function loadServers() {
   if ($("#app-view").hidden) return;
-  try { S.servers = (await api("GET", "servers")).servers; } catch (e) { return; }
+  try { ({ servers: S.servers, hub_url: S.hubUrl } = await api("GET", "servers")); } catch (e) { return; }
   if (!serverById(S.server) && S.servers.length) selectServer(S.servers[0].id, true);
   const online = S.servers.filter((s) => s.online).length;
   $("#nav-servers").textContent = S.servers.length > 1 ? `${online}/${S.servers.length}` : "";
@@ -873,6 +873,7 @@ function serverTile(s) {
         meter("Disk", sys.disk_total ? `${Math.round(pct(sys.disk_used, sys.disk_total))}%` : "—", pct(sys.disk_used, sys.disk_total))),
       h("span", { class: "tile-foot" },
         s.local && h("span", { class: "badge badge-primary" }, "hub"),
+        s.hub_url && h("span", { class: "badge mono", title: `Connects to the hub at ${s.hub_url}` }, icon("link"), s.hub_url.replace(/^https?:\/\//, "")),
         ...s.tags.map((t) => h("span", { class: "badge" }, icon("tag"), t)),
         ...limits.map((l) => h("span", { class: "badge badge-warning", title: "Set by this server’s agent policy" }, icon("lock"), l)))),
     h("span", { class: "tile-status" }, h("span", { class: `dot ${serverDot(s)}` })),
@@ -880,6 +881,7 @@ function serverTile(s) {
     S.session.allow_editing && h("div", { class: "tile-tools" },
       h("button", { class: "btn btn-ghost btn-icon btn-sm", title: "Files", "aria-label": `Files on ${s.name}`, onclick: () => go("files") }, icon("folder")),
       h("button", { class: "btn btn-ghost btn-icon btn-sm", title: "Rename / tags", "aria-label": `Edit ${s.name}`, onclick: () => editServerDialog(s) }, icon("pencil")),
+      !s.local && h("button", { class: "btn btn-ghost btn-icon btn-sm", title: "Hub address", "aria-label": `Change the hub address ${s.name} connects to`, onclick: () => hubAddressDialog(s) }, icon("link")),
       !s.local && h("button", { class: "btn btn-ghost btn-icon btn-sm", title: "Remove", "aria-label": `Remove ${s.name}`, onclick: () => removeServer(s) }, icon("trash"))));
 }
 
@@ -897,6 +899,53 @@ function editServerDialog(s) {
       await api("POST", `servers/${s.id}`, { name: form.elements.name.value, tags: form.elements.tags.value });
       await loadServers();
       toast("Server updated", "ok");
+      return true;
+    },
+  });
+}
+
+/** Repoint agents at another address for this hub (new IP, LAN port, proxy URL). */
+function hubAddressDialog(s) {
+  const others = S.servers.filter((x) => !x.local && x.online && x.id !== s.id);
+  const suggested = S.hubUrl && S.hubUrl !== s.hub_url ? S.hubUrl : (s.hub_url || S.hubUrl || "");
+  const input = h("input", { class: "input mono-input", name: "url", value: suggested, required: true, placeholder: "http://192.168.1.10:8781" });
+  const warn = h("p", { class: "hint-text" });
+  const cli = h("div", { class: "confirm-cmd" });
+  const sync = () => {
+    const url = input.value.trim().replace(/\/+$/, "");
+    warn.replaceChildren(url.startsWith("http://") && !isLanUrl(url)
+      ? h("strong", { style: "color:var(--warning)" }, "Plain http to a public address: agents will refuse it. Use HTTPS or the hub’s LAN address.")
+      : url.startsWith("http://") ? "Plain http on your private network: fine for a LAN, but traffic isn’t encrypted." : "");
+    cli.textContent = `sudo python3 /opt/helm-agent/agent.py --set-hub ${url || "<new-url>"}`;
+  };
+  input.addEventListener("input", sync);
+  sync();
+  return modal({
+    title: `Hub address for ${s.name}`,
+    body: [
+      h("p", { class: "confirm-desc" },
+        "The address this server’s agent dials to reach Helm. Change it before the hub moves to a new IP or port, or to switch between the LAN address and your proxy URL. ",
+        "The agent first checks that the new address reaches this same hub, and keeps the old one if it doesn’t."),
+      s.hub_url && h("p", { class: "hint-text", style: "margin:.75rem 0" }, "Now: ", h("code", {}, s.hub_url)),
+      h("label", { class: "field" }, h("span", { class: "label" }, "New hub address"), input, warn),
+      others.length > 0 && h("label", { class: "check" }, h("input", { type: "checkbox", name: "all" }),
+        `Also apply to the other ${others.length} online server${others.length === 1 ? "" : "s"}`),
+      !s.online && h("p", { class: "hint-text" }, h("strong", { style: "color:var(--warning)" }, `${s.name} is offline, so it can’t be changed from here. `), "Run this on it instead:"),
+      h("p", { class: "hint-text" }, s.online ? "For a server that can no longer reach the hub, run this on it:" : ""),
+      cli,
+    ],
+    buttons: [{ label: "Cancel", value: null }, { label: "Change address", icon: "link", primary: true, submit: true }],
+    onSubmit: async (form) => {
+      const url = input.value.trim();
+      const targets = [s, ...(form.elements.all?.checked ? others : [])].filter((x) => x.online);
+      if (!targets.length) throw new Error(`${s.name} is offline. Run the command above on it.`);
+      const results = await Promise.all(targets.map((t) => api("POST", `servers/${t.id}/hub`, { url })
+        .then(() => null, (e) => `${t.name}: ${e.message}`)));
+      const failed = results.filter(Boolean);
+      await loadServers();
+      if (failed.length === targets.length) throw new Error(failed.join("\n"));
+      toast(`${targets.length - failed.length} server${targets.length - failed.length === 1 ? "" : "s"} now use ${url}`, "ok");
+      if (failed.length) toast(`Not changed: ${failed.join("; ")}`, "error");
       return true;
     },
   });
@@ -1346,6 +1395,7 @@ function sourceIcon(j) {
   if (j.source === "console") return "terminal";
   if (j.source === "editor") return "pencil";
   if (j.source === "file") return "file-text";
+  if (j.source === "servers") return "link";
   const a = j.meta?.action_id && S.library.find((x) => x.id === j.meta.action_id);
   return a ? a.icon : "zap";
 }

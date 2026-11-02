@@ -41,6 +41,19 @@ Install as a service with `sudo ./deploy/install.sh`. It puts code in `/opt/helm
 
 The agent only makes outbound HTTPS requests. Managed servers need **no open ports**, and it works behind NAT. Agents reconnect on their own after a hub restart.
 
+### Changing the hub address
+
+The hub's IP or port changed, or you want to switch an agent between the LAN address and the Pangolin URL:
+
+- **From Helm** (the agent is still connected): on the server's tile, click the link icon and enter the new address. You can apply it to every online server at once. Each agent first checks that the new address reaches this same hub, by testing it with its own key, and keeps the old address if it doesn't. Do this *before* moving the hub. Each tile shows the address its agent uses.
+- **On the server** (the agent can no longer reach the hub):
+  ```bash
+  sudo python3 /opt/helm-agent/agent.py --set-hub http://192.168.1.20:8781
+  ```
+  It runs the same check, saves the address to `/etc/helm-agent/agent.json`, and restarts `helm-agent`. Add `--no-check` to save it while the hub is down.
+
+The same http/https rule as enrollment applies. To stop the hub from changing an agent's address remotely, set `allow_hub_change: false` in that agent's policy.
+
 **Removing** a server (trash icon on its tile) revokes its key immediately. Stop the agent on the box with `systemctl disable --now helm-agent`.
 
 ## Behind Pangolin (or another proxy), with agents on your LAN
@@ -74,6 +87,7 @@ Browsers go through Pangolin over HTTPS with its login; agents talk to the hub d
 | `file_roots` | `/etc /opt /srv /var/log` | The only folders the hub can see. Symlinks are resolved before checking. |
 | `use_sudo` | `false` | Prefix systemctl/journalctl with `sudo -n` when the agent isn't root (see `deploy/helm.sudoers`) |
 | `job_timeout_seconds` | `3600` | Hard cap on any job here |
+| `allow_hub_change` | `true` | Let the hub repoint this agent to another hub address (it must answer with this agent's key) |
 
 The hub can't override these. A compromised or misconfigured hub can only do what each server's own policy allows. The Servers page shows each server's limits.
 

@@ -366,6 +366,7 @@ class RemoteConn:
         self.policy = {}
         self.version = None
         self.running = []
+        self.hub_url = record.get("hub_url")
 
     @property
     def id(self):
@@ -386,6 +387,8 @@ class RemoteConn:
         self.policy = body.get("policy") or self.policy
         self.version = body.get("version") or self.version
         self.running = body.get("running") or []
+        if body.get("hub_url"):
+            self.hub_url = str(body["hub_url"])[:300]
         with self.cond:
             if not self.outbox:
                 self.cond.wait(POLL_HOLD)
@@ -475,7 +478,7 @@ class Servers:
             "tags": r.get("tags", []), "local": conn.local, "online": conn.online,
             "last_seen": None if conn.local else (conn.last_seen or None),
             "version": conn.version, "system": conn.system or {}, "policy": conn.policy or {},
-            "created": r.get("created"),
+            "created": r.get("created"), "hub_url": None if conn.local else conn.hub_url,
         }
 
     def list(self):
@@ -895,6 +898,8 @@ def make_handler(app, agent_only=False):
             if not conn:
                 raise ApiError(401, "Unknown or revoked agent")
             body = self._body()
+            if path == "/agent/ping":
+                return self._send(200, {"ok": True, "agent_id": conn.id})
             if path == "/agent/poll":
                 return self._send(200, {"messages": conn.poll(body)})
             if path == "/agent/push":
@@ -931,7 +936,10 @@ def make_handler(app, agent_only=False):
             # -- servers -----------------------------------------------------
             if parts[:1] == ["servers"]:
                 if method == "GET" and len(parts) == 1:
-                    return self._send(200, {"servers": app.servers.list()})
+                    return self._send(200, {"servers": app.servers.list(), "hub_url": self._hub_url()})
+                if method == "POST" and len(parts) == 3 and parts[2] == "hub":
+                    self._require_editing()
+                    return self._set_hub(parts[1], self._body(), user)
                 if method == "POST" and len(parts) == 2:
                     self._require_editing()
                     body = self._body()
@@ -1096,6 +1104,19 @@ def make_handler(app, agent_only=False):
             jobs = [app.jobs.launch(c, item["name"], spec, source="action", user=user, run_id=run_id,
                                     meta={"action_id": item["id"], "params": env}) for c in conns]
             return self._send(200, {"run_id": run_id, "jobs": [j.summary() for j in jobs]})
+
+        def _set_hub(self, sid, body, user):
+            conn = app.servers.get(sid)
+            if conn.local:
+                raise ApiError(400, "The hub's own server is built in; it has no hub address")
+            url = str(body.get("url") or "").strip()
+            if not url:
+                raise ApiError(400, "Enter the new hub address")
+            res = conn.request("set_hub", {"url": url}, timeout=40)
+            conn.hub_url = res.get("hub_url") or url
+            app.jobs.event(conn, "Changed hub address", f"{res.get('previous')} -> {conn.hub_url}\n",
+                           source="servers", user=user, meta={"hub_url": conn.hub_url})
+            return self._send(200, {"ok": True, "hub_url": conn.hub_url, "previous": res.get("previous")})
 
         def _service_action(self, sid, unit, action, user):
             conn = app.servers.get(sid)
