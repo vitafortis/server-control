@@ -17,6 +17,7 @@ A lightweight control plane for your servers. Think OliveTin plus the useful 10%
 - **Files**: browse, view and edit files inside each server's allowed folders, with highlighting for configs, scripts, JSON, logs and diffs. Every save keeps a backup and records a diff in History.
 - **Console**: run anything on the selected server; *Save as action* sends it to the editor.
 - **History**: every run and file edit, with where, who, how long, and the full output.
+- **Pretty / Raw output**: any output Helm recognizes gets a *Pretty* view with meters, cards and tables: `df` (used vs free per mount), `free` (used / cache / free), `uptime` and `top` (load as a share of the server's CPUs, CPU and memory bars), and column output such as `ps`, `ss` or `docker ps` (with bars for % columns). One click switches back to the raw terminal output, and Helm remembers your choice.
 
 No dependencies: Python 3.8+ standard library and static HTML/CSS/JS. Geist fonts and Lucide icons are bundled. No build step.
 
@@ -118,6 +119,18 @@ The hub can't override these. A compromised or misconfigured hub can only do wha
 - Agent keys are stored hashed on the hub; enrollment tokens are single-use and expire after 1 hour. Agents use plain http only to private/LAN addresses, unless you pass `--insecure-http`.
 - Parameter values reach scripts as environment variables (and `$1…`), never spliced into script text.
 - Logins: PBKDF2 hashes, per-IP rate limiting, `HttpOnly; SameSite=Strict` cookies, an `X-Helm` header required on every state-changing request, and a strict CSP.
+
+## Gauges from your own scripts
+
+Print `::metric` lines and the Pretty view shows them as gauge cards. The rest of the output is still shown below them.
+
+```bash
+echo "::metric CPU temp: $(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))/95 °C warn=70 crit=85"
+echo "::metric Queue depth: $(redis-cli llen jobs)"
+echo "::metric Cache hit: 97.5 % warn=90 crit=80"     # crit below warn = low is bad
+```
+
+Format: `::metric <label>: <value>[/<max>] [unit] [warn=N] [crit=N]`. A `/max` or a `%` unit draws a bar. Cards stay neutral unless you give `warn`/`crit`.
 
 ## Theming
 

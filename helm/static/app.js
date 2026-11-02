@@ -1342,6 +1342,7 @@ function diffDialog(path, res) {
 let consoleEditor = null;
 let consoleJob = null;
 let consoleStop = null;
+let consoleView = null;
 
 function renderConsole() {
   const s = current();
@@ -1381,7 +1382,7 @@ async function runConsole() {
       setBadge($("#console-status"), j);
       $("#console-kill").hidden = j.status !== "running";
       $("#console-time").textContent = j.finished ? fmtDuration(j.finished - j.started) : "";
-    });
+    }, consoleView || (consoleView = outputView($("#console-term"), $("#console-view"))));
   } catch (e) { toast(e.message, "error"); }
 }
 
@@ -1444,8 +1445,48 @@ function trackJob(job, onDone) {
   if (S.view === "actions") renderActions();
 }
 
+// ---------------------------------------------------------------------------
+// output views: Raw (terminal) / Pretty (meters, cards, tables from viz.js)
+// ---------------------------------------------------------------------------
+const outputViews = [];
+let outputMode = lsGet("helm-output-view") === "raw" ? "raw" : "pretty";
+
+/** Adds a Pretty/Raw switch to `slot` and a pretty pane next to `term`. The switch only
+ *  shows when viz.js recognizes the output; the choice is shared by every output view. */
+function outputView(term, slot) {
+  const pane = h("div", { class: "vz", hidden: true });
+  term.after(pane);
+  const btn = (mode, ic, label) => h("button", { type: "button", "data-mode": mode, title: `${label} view`,
+    onclick: () => { outputMode = mode; lsSet("helm-output-view", mode); outputViews.forEach((v) => v.apply()); } }, icon(ic), label);
+  const sw = h("span", { class: "seg", role: "group", "aria-label": "Output view", hidden: true },
+    btn("pretty", "gauge", "Pretty"), btn("raw", "terminal", "Raw"));
+  slot.replaceChildren(sw);
+  let lastText = null;
+  let pretty = null;
+  const view = {
+    apply() {
+      const on = !!pretty && outputMode === "pretty";
+      sw.hidden = !pretty;
+      $$("button", sw).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === (pretty ? outputMode : "raw"))));
+      pane.hidden = !on;
+      term.hidden = on;
+    },
+    update(text, ctx) {
+      if (text === lastText) return;
+      lastText = text;
+      const top = pane.scrollTop;
+      pretty = Viz.render(text, ctx);
+      pane.replaceChildren(...(pretty ? [pretty] : []));
+      pane.scrollTop = top;
+      view.apply();
+    },
+  };
+  outputViews.push(view);
+  return view;
+}
+
 /** Stream a job's output into `term`. Returns a cancel function. */
-function streamJob(job, term, onUpdate) {
+function streamJob(job, term, onUpdate, view) {
   let offset = 0;
   let cancelled = false;
   let timer = null;
@@ -1467,7 +1508,9 @@ function streamJob(job, term, onUpdate) {
     if (j.status === "running") timer = setTimeout(tick, 400);
     else if (!term.textContent) term.textContent = "(no output)";
     else if (j.source === "file") term.innerHTML = highlight(term.textContent, "diff");
+    if (view) view.update(j.source === "file" ? "" : term.textContent, { cpus: serverById(job.server_id)?.system?.cpus });
   };
+  if (view) view.update("", {});
   tick();
   return () => { cancelled = true; clearTimeout(timer); };
 }
@@ -1477,6 +1520,7 @@ function streamJob(job, term, onUpdate) {
 // ---------------------------------------------------------------------------
 let drawerStop = null;
 const drawer = $("#run-drawer");
+const drawerView = outputView($("#run-term"), $("#run-view"));
 
 function openDrawer(jobOrJobs) {
   let jobs = Array.isArray(jobOrJobs) ? jobOrJobs : [jobOrJobs];
@@ -1538,7 +1582,7 @@ function showDrawerJob(job) {
     $("#run-sub").textContent = bits.filter(Boolean).join(" · ");
     const known = S.drawer?.jobs.find((x) => x.id === j.id);
     if (known && known.status !== j.status) { Object.assign(known, { status: j.status, exit_code: j.exit_code }); renderRunTabs(); }
-  });
+  }, drawerView);
 }
 
 function closeDrawer() {
